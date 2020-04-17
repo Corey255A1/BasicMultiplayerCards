@@ -20,6 +20,7 @@ class Player {
     constructor(client,id) {
         this.properties = {
             id: id,
+            pos:{x:20,y:20}
         };
         this.connected = true;
         this.client = client;
@@ -33,13 +34,21 @@ class Player {
         return this.properties.id;
     }
 
+    set pos(val){
+        this.pos.x = val.x;
+        this.pos.y = val.y;
+    }
+    get pos(){
+        return this.properties.pos;
+    }
+
     processControl(msg) {
         switch (msg) {
             case 'none': break;
         }
     }
-    update(objects) {
-        this.client.send(objects);
+    update(cmd,parameters) {
+        this.client.send(JSON.stringify({cmd:cmd,parameters:parameters}));
     }
 }
 
@@ -116,16 +125,16 @@ const wsserver = new WebSocket.Server({ server: webServer });
 
 let PlayerList = {};
 let id=0;
-function SendToAllOtherPlayers(player,msg){
+function SendToAllOtherPlayers(player, cmd, parameters){
     Object.keys(PlayerList).forEach((p)=>{
         if(PlayerList[p]!==player){
-            PlayerList[p].update(msg);
+            PlayerList[p].update(cmd, parameters);
         }
     })
 }
-function SendToAllPlayers(msg){
+function SendToAllPlayers(cmd, parameters){
     Object.keys(PlayerList).forEach((p)=>{
-        PlayerList[p].update(msg);
+        PlayerList[p].update(cmd, parameters);
     })
 }
 wsserver.on('connection', (client) => {
@@ -135,40 +144,55 @@ wsserver.on('connection', (client) => {
         (e) => {
             try {
                 let msg = JSON.parse(e);
+                let cmd = msg.cmd;
+                let params = msg.parameters;
                 console.log(msg);
-                switch (msg.cmd) {
-                    case 'none': break;
+                switch (cmd) {
+                    case 'moveplayer': 
+                        player.pos = params.pos;
+                        SendToAllOtherPlayers(player,"playermove",{id:player.id,pos:player.pos});
+                    break;
                     case 'move':
-                        DECK[msg.id].setPos(msg.pos);
-                        SendToAllOtherPlayers(player,JSON.stringify({cmd:"move",id:msg.id,pos:msg.pos}));
+                        DECK[params.id].setPos(params.pos);
+                        SendToAllOtherPlayers(player,"move",{id:params.id,pos:params.pos});
                     break;
                     case 'flip':
-                        DECK[msg.id].flip();                        
-                        SendToAllPlayers(JSON.stringify({cmd:"flip",id:msg.id,faceup:DECK[msg.id].faceup,face:DECK[msg.id].faceup?DECK[msg.id].face:{suit:"",value:""}}));
+                        DECK[params.id].flip();                        
+                        SendToAllPlayers("flip",{id:params.id,faceup:DECK[params.id].faceup,face:DECK[params.id].faceup?DECK[params.id].face:{suit:"",value:""}});
                         break;
                     case 'peek':
-                        if(player.peeking[msg.id]===true)
+                        if(player.peeking[params.id]===true)
                         {
-                            player.peeking[msg.id] = false;
+                            player.peeking[params.id] = false;
                         }else{
-                            player.peeking[msg.id] = true;
+                            player.peeking[params.id] = true;
                         }
-                        console.log(player.peeking[msg.id])
-                        player.update(JSON.stringify(
-                            {cmd:'peek',id:msg.id,
-                            peeking:player.peeking[msg.id],
-                            face:player.peeking[msg.id]?DECK[msg.id].face:{suit:"",value:""}}
-                        ));
-                        SendToAllOtherPlayers(player,JSON.stringify({cmd:"playerpeeking",playerid:player.id,id:msg.id,peeking:player.peeking[msg.id]}));
+                        console.log(player.peeking[params.id])
+                        player.update('peek',
+                            {
+                                id:params.id,
+                                peeking:player.peeking[params.id],
+                                face:player.peeking[params.id]?DECK[params.id].face:{suit:"",value:""}
+                            });
+                        SendToAllOtherPlayers(player,"playerpeeking",{playerid:player.id,id:params.id,peeking:player.peeking[params.id]});
                         break;
-                    default:player.processControl(msg.cmd);break;
+                    case 'reset':
+                        reset();
+                        SendToAllPlayers('cardpositions',{positions:CardList});
+                    default:player.processControl(params.cmd);break;
                 }            
             } catch(exp) {
                 console.log('Not Json: ' + exp);
             }
         }
     );
-    player.update(JSON.stringify({cmd:'cardpositions',positions:CardList}));
+    let templist=[];
+    Object.keys(PlayerList).forEach((p)=>{
+        templist.push({id:PlayerList[p].id, pos:PlayerList[p].pos})
+    });
+    player.update('cardpositions',{positions:CardList});
+    player.update('playerpos',{pos:player.pos, playerpositions:templist});
+    SendToAllOtherPlayers(player,'addplayer',{pos:player.pos, id:player.id});
     PlayerList[id++] = player;
 });
 

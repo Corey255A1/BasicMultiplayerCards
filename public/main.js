@@ -1,5 +1,5 @@
 class Card{
-    constructor(id, x, y, z, flipcb, peekcb){
+    constructor(id, x, y, z, flipcb, peekcb, snapcb){
         this.id = id;
         this.num = 0;
         this.suit = 'unknown';
@@ -12,11 +12,16 @@ class Card{
         this.peekBtn.textContent = "Peek";
         this.flipBtn = document.createElement('button');
         this.flipBtn.textContent = "Flip";
+        this.drawBtn = document.createElement('button');
+        this.drawBtn.textContent = "Draw";
         this.peekBtn.addEventListener('click',()=>{
             peekcb(this.id);
         });
         this.flipBtn.addEventListener('click',()=>{
             flipcb(this.id);
+        });
+        this.drawBtn.addEventListener('click',()=>{
+            snapcb(this.id);
         });
         this.domElem.appendChild(this.cardVal);
         this.domElem.classList.add('playingcard');
@@ -25,9 +30,10 @@ class Card{
         this.domElem.cardnum = this.id;
         this.controls.appendChild(this.peekBtn);
         this.controls.appendChild(this.flipBtn);
+        this.controls.appendChild(this.drawBtn);
         this.domElem.appendChild(this.controls);
         this.domElem.appendChild(this.peekingplayerelem);
-        this.pos = {x:0,y:0,z:0}
+        this.pos = {x:0,y:0,z:0};
         this.x = x;
         this.y = y;
         this.z = z;
@@ -110,7 +116,47 @@ class Card{
         }
     }
 }
+class PlayerToken{
+    constructor(x,y,id){
+        this.domElem = document.createElement('div');
+        this.domElem.id = 'playerpos-'+id;
+        this.domElem.classList.add('playertoken');
+        this.pos = {x:0,y:0};
+        this.x = x;
+        this.y = y;
+    }
+    setPos(pos){
+        this.x = pos.x;
+        this.y = pos.y;
+    }
+    move(dx,dy){
+        this.x = this.pos.x + dx;
+        this.y = this.pos.y + dy;
+    }
+    get id(){
+        return this.domElem.id;
+    }
+    set x(x){
+        this.pos.x = x;
+        this.domElem.style.left = x +'px';
+    }
+    set y(y){
+        this.pos.y = y
+        this.domElem.style.top = y +'px';
+    }
+}
 let CardMap = undefined;
+let playerToken = new PlayerToken(0,0,'player');
+playerToken.domElem.classList.add('blue');
+playerToken.domElem.classList.add('player');
+document.body.appendChild(playerToken.domElem);
+
+const ws = new WebSocket('ws://compy:1335');
+function send(cmd,parameters){
+    ws.send(JSON.stringify({cmd:cmd,parameters:parameters}))
+}
+
+let PlayerPositions = {};
 let DECK = [];
 function reset(){
     if(CardMap !== undefined){
@@ -119,53 +165,68 @@ function reset(){
         });
     }
     CardMap = {};
-
-    for(let i = 0; i<DECK.length; i++){
-        let tempCard = new Card(i, 50, 50, 1);
-        tempCard.face = DECK[i];
-        
-        CardMap[tempCard.domElem.id] = tempCard;
-        //tempCard.flip();
-    }
 }
 
 const playingcards = document.getElementById('playingcards');
 document.getElementById('reset').addEventListener('click',()=>{
-    reset();
+    send('reset',{});
 });
 
-const ws = new WebSocket('ws://compy:1335');
 
 function flipCard(id){
-    ws.send(JSON.stringify({cmd:'flip',id:id}))
+    send('flip',{id:id});
 }
 function peekCard(id){
-    ws.send(JSON.stringify({cmd:'peek',id:id}))
+    send('peek',{id:id})
+}
+function drawCard(id){
+    CardMap[id].setPos(playerToken.pos);
+    moveCard(id,CardMap[id].pos);
 }
 function moveCard(id,pos){
-    ws.send(JSON.stringify({cmd:'move',id:id, pos:pos}));
+    send('move',{id:id, pos:pos});
+}
+function movePlayer(pos){
+    send("moveplayer",{pos:pos});
 }
 ws.addEventListener('message',(m)=>{
     let msg = JSON.parse(m.data);
-    switch(msg.cmd){
+    let cmd = msg.cmd;
+    let params = msg.parameters;
+    switch(cmd){
+        case 'addplayer':
+            PlayerPositions[params.id] = new PlayerToken(params.pos.x, params.pos.y,params.id);
+            document.body.appendChild(PlayerPositions[params.id].domElem);
+            break;
+        case 'playermove':
+            PlayerPositions[params.id].setPos(params.pos);
+            break;
         case 'move':
-            CardMap[msg.id].setPos(msg.pos);
+            CardMap[params.id].setPos(params.pos);
             break;
         case 'flip':
-            CardMap[msg.id].face = msg.face;
-            CardMap[msg.id].flipped = msg.faceup;
+            CardMap[params.id].face = params.face;
+            CardMap[params.id].flipped = params.faceup;
             break;
         case 'peek':
-            CardMap[msg.id].face = msg.face;
-            CardMap[msg.id].peeking = msg.peeking;
+            CardMap[params.id].face = params.face;
+            CardMap[params.id].peeking = params.peeking;
+            break;
+        case 'playerpos':
+            playerToken.setPos(params.pos);
+            params.playerpositions.forEach((pp)=>{
+                PlayerPositions[pp.id] = new PlayerToken(pp.pos.x, pp.pos.y,pp.id);
+                document.body.appendChild(PlayerPositions[pp.id].domElem);
+            })
             break;
         case 'cardpositions':{
+            reset();
             if(CardMap === undefined){
                 CardMap = {};
             }
-            msg.positions.forEach((pos)=>{
+            params.positions.forEach((pos)=>{
                 if(CardMap[pos.id]===undefined){
-                    CardMap[pos.id] = new Card(pos.id,pos.x,pos.y,pos.z,flipCard,peekCard);
+                    CardMap[pos.id] = new Card(pos.id,pos.x,pos.y,pos.z,flipCard,peekCard,drawCard);
                     CardMap[pos.id].flipped = pos.faceup;
                     CardMap[pos.id].face = pos.face;
                     playingcards.appendChild(CardMap[pos.id].domElem);
@@ -176,19 +237,18 @@ ws.addEventListener('message',(m)=>{
         }
         break;
         case 'playerpeeking':{
-            if(msg.peeking){
-                CardMap[msg.id].peekingplayer = msg.playerid;
+            if(params.peeking){
+                CardMap[params.id].peekingplayer = params.playerid;
             }else{
-                CardMap[msg.id].peekingplayer = "";
+                CardMap[params.id].peekingplayer = "";
             }
             
         }
     }
-    console.log();
 });
 
-
 var cardTargetID = undefined;
+var draggingplayer = false;
 let zidx = 1;
 const delta = {
     lastX:0, 
@@ -207,22 +267,30 @@ const delta = {
     }
 }
 window.addEventListener('mousedown',(e)=>{
-    if(CardMap[e.target.cardnum] !== undefined){
+    if(e.target.id === playerToken.id){
+        draggingplayer = true;
+        delta.lastX = e.clientX;
+        delta.lastY = e.clientY;
+    }
+    else if(CardMap[e.target.cardnum] !== undefined){
         cardTargetID = e.target.cardnum;
         delta.lastX = e.clientX;
         delta.lastY = e.clientY;
         CardMap[cardTargetID].z = (zidx++);
     }
 });
-window.addEventListener('mouseup',(e)=>{
-    if(cardTargetID!==undefined){
-        //console.log(e);
+window.addEventListener('mouseup',(e)=>{;
         cardTargetID = undefined;
-        
-    }
+        draggingplayer = false;
 });
 window.addEventListener('mousemove',(e)=>{
-    if(cardTargetID!==undefined){
+    if(draggingplayer){
+        delta.newX = e.clientX;
+        delta.newY = e.clientY;
+        playerToken.move(delta.deltaX, delta.deltaY);
+        movePlayer(playerToken.pos);
+    }
+    else if(cardTargetID!==undefined){
         //console.log(e);
         delta.newX = e.clientX;
         delta.newY = e.clientY;
@@ -230,33 +298,3 @@ window.addEventListener('mousemove',(e)=>{
         moveCard(cardTargetID,CardMap[cardTargetID].pos);
     }
 });
-
-// const canvas = document.getElementById("playingfield");
-// const ctx = canvas.getContext("2d");
-
-// var Width = window.innerWidth;
-// var Height = window.innerHeight;
-// function ResizeCanvas(){
-//     canvas.width = Width;
-//     canvas.height = Height;
-//     canvas.style.width = Width;
-//     canvas.style.height = Height;
-// }
-// ResizeCanvas();
-// window.addEventListener('resize',()=>{
-//     Width = window.innerWidth;
-//     Height = window.innerHeight;
-//     ResizeCanvas();
-// });
-
-
-
-
-
-
-// function animate(){
-//     ctx.fillStyle = 'green';
-//     ctx.fillRect(0,0,canvas.width,canvas.height);
-// }
-
-// animate();
